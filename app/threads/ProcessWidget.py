@@ -1,3 +1,4 @@
+import functools
 import sys
 import time
 
@@ -203,6 +204,32 @@ class ProcessThread(QThread):
     @pyqtSlot()
     def onStopSignal(self):
         self.can_run = False
+
+    def __init_subclass__(cls, **kwargs):
+        """子类 run() 统一兜底：漏网之鱼转成 error + canceled，子类不需要改名或包裹。"""
+        super().__init_subclass__(**kwargs)
+        run = cls.__dict__.get("run")
+        if run is None or getattr(run, "_process_thread_guarded", False):
+            return
+
+        @functools.wraps(run)
+        def guarded_run(self):
+            # 线程入口的最后兜底：业务异常无法枚举（标注 noqa 消除 Ruff 提示），在此统一抛出而不是让它冒至全局
+            # sys.excepthook；SystemExit / KeyboardInterrupt 继承 BaseException，会照常穿透。
+            try:
+                run(self)
+            except Exception as error:  # noqa: BLE001
+                self._report_run_error(error)
+
+        guarded_run._process_thread_guarded = True
+        cls.run = guarded_run
+
+    def _report_run_error(self, error: Exception) -> None:
+        kind = type(error).__name__
+        detail = str(error).strip() or kind
+        logger.error("后台任务失败：%s", kind, exc_info=True)
+        self.error.emit(self.tr("操作失败"), detail)
+        self.canceled.emit()
 
 
 class ProcessDialog(MessageBoxBase):

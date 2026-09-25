@@ -133,5 +133,59 @@ class ProcessWidgetFinishRaceTest(ProcessWidgetTestBase):
         self.assertFalse(widget.timer.isActive())
 
 
+class RunGuardThread(ProcessThread):
+    """run() 抛出漏网之鱼，用于验证base类兜底。"""
+
+    def __init__(self, error=None):
+        super().__init__()
+        self.error_to_raise = error if error is not None else ValueError("boom")
+
+    def run(self):
+        raise self.error_to_raise
+
+
+class ProcessThreadRunGuardTest(unittest.TestCase):
+    """ProcessThread 兜底子类 run() 中未捕获的异常。"""
+
+    def _guard_thread(self, error=None):
+        thread = RunGuardThread(error)
+        events = []
+        thread.error.connect(lambda title, detail: events.append(("error", title, detail)))
+        thread.canceled.connect(lambda: events.append(("canceled",)))
+        thread.hasFinished.connect(lambda: events.append(("finished",)))
+        return thread, events
+
+    def test_unhandled_exception_reports_error_then_canceled(self):
+        thread, events = self._guard_thread(ValueError("boom"))
+
+        thread.run()
+
+        self.assertEqual(events, [("error", "操作失败", "boom"), ("canceled",)])
+
+    def test_empty_exception_message_falls_back_to_type_name(self):
+        thread, events = self._guard_thread(ValueError())
+
+        thread.run()
+
+        self.assertEqual(events, [("error", "操作失败", "ValueError"), ("canceled",)])
+
+    def test_system_exit_is_not_swallowed(self):
+        thread, events = self._guard_thread(SystemExit(0))
+
+        with self.assertRaises(SystemExit):
+            thread.run()
+
+        self.assertEqual(events, [])
+
+    def test_started_thread_run_is_guarded_through_qt_dispatch(self):
+        thread, events = self._guard_thread(ValueError("boom"))
+
+        thread.start()
+        self.assertTrue(thread.wait(5000))
+        APP.processEvents()  # 信号经主线程事件循环派发
+
+        self.assertEqual(events, [("error", "操作失败", "boom"), ("canceled",)])
+
+
 if __name__ == "__main__":
     unittest.main()
