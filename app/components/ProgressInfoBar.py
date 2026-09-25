@@ -51,6 +51,7 @@ class ProgressInfoBar(QFrame):
         self.thread_dead_time = 5
         self.dead_time_start = 0
         self.stopped = False
+        self._saw_end = False  # 本轮是否已经收到 hasFinished / canceled
 
         self.timer = QTimer(self)
         self.timer.setInterval(500)
@@ -87,12 +88,13 @@ class ProgressInfoBar(QFrame):
         """
         if disconnect_last and self.thread_ is not None:
             self.thread_.progressChanged.disconnect(self.onProgressChange)
-            self.thread_.progressPause.disconnect(self.onProgressPause)
-            self.thread_.processFinish.disconnect(self.onProcessFinish)
+            self.thread_.progressPaused.disconnect(self.onProgressPause)
+            self.thread_.hasFinished.disconnect(self.onProcessFinish)
             self.thread_.messageChanged.disconnect(self.onMessageChange)
             self.thread_.deadTime.disconnect(self.onSetDeadTime)
             self.thread_.started.disconnect(self.onThreadStart)
             self.thread_.canceled.disconnect(self.onStopped)
+            self.thread_.finished.disconnect(self.onThreadExited)
             self.thread_.titleChanged.disconnect(self.onTitleChange)
             self.closedSignal.disconnect(self.thread_.onStopSignal)
             self.thread_.maximumChanged.disconnect(self.onMaximumChange)
@@ -106,11 +108,13 @@ class ProgressInfoBar(QFrame):
         thread.deadTime.connect(self.onSetDeadTime)
         thread.started.connect(self.onThreadStart)
         thread.canceled.connect(self.onStopped)
+        thread.finished.connect(self.onThreadExited)  # QThread.finished
 
         self.closedSignal.connect(thread.onStopSignal)
 
         self.dead_time_start = 0
         self.stopped = False
+        self._saw_end = False
         self.thread_dead_time = 5
         self.thread_ = thread
 
@@ -282,7 +286,22 @@ class ProgressInfoBar(QFrame):
 
     @pyqtSlot()
     def onThreadStart(self):
+        self.stopped = False
+        self._saw_end = False
         self.timer.start()
+
+    @pyqtSlot()
+    def onThreadExited(self):
+        """QThread.finished：线程已结束。未收到成功/取消信号时按取消统一清理。"""
+        sender = self.sender()
+        if sender is not None and sender is not self.thread_:
+            return  # 旧线程的迟到信号
+        # onProcessFinish/onStopped 已停表并关闭，对象可能已 deleteLater，
+        # 不继续访问 timer 对象
+        if self._saw_end:
+            return
+        logger.warning("%s 线程未发送结束信号即退出", type(self.thread_).__name__)
+        self.onStopped()
 
     @pyqtSlot(int)
     def onProgressChange(self, progress: int):
@@ -306,12 +325,14 @@ class ProgressInfoBar(QFrame):
 
     @pyqtSlot()
     def onProcessFinish(self):
+        self._saw_end = True
         self.timer.stop()
         self.finished.emit()
         self.close()
 
     @pyqtSlot()
     def onStopped(self):
+        self._saw_end = True
         self.timer.stop()
         self.canceled.emit()
         self.close()
@@ -334,13 +355,15 @@ class ProgressInfoBar(QFrame):
 
     @pyqtSlot()
     def checkProcess(self):
-        if not self.thread_.isRunning():
-            # 如果线程是被要求退出的，发送退出信号
-            if self.stopped:
-                self.onStopped()
+        if self.thread_ is None:
             self.timer.stop()
+            return
+        if not self.thread_.isRunning():
+            self.timer.stop()
+            # 结束判定统一由 onThreadExited（QThread.finished）负责
+            return
         # 如果已经发送了停止请求，且超过了设定的时间线程仍然没有退出，强制终止线程
-        if self.stopped and self.thread_.isRunning() and time.time() - self.dead_time_start > self.thread_dead_time:
+        if self.stopped and time.time() - self.dead_time_start > self.thread_dead_time:
             logger.warning(f"{str(self.thread_)} 线程强制退出")
             self.thread_.terminate()
             self.thread_.wait()
