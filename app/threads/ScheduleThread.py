@@ -6,7 +6,7 @@ from .ProcessWidget import ProcessThread
 from ..sessions.attendance_session import AttendanceSession
 from ..sessions.jwxt_session import JWXTSession
 from ..sessions.js_session import JsSession
-from ..utils import logger, accounts
+from ..utils import logger, accounts, request_mfa
 from ..utils.mfa import MFACancelledError, MFAUnavailableError
 from ..utils.qrcode_login import QRCodeLoginCancelledError, QRCodeLoginUnavailableError
 from attendance import Attendance
@@ -100,7 +100,9 @@ class ScheduleThread(ProcessThread):
 
     def run(self):
         self.can_run = True
-        if accounts.current is None:
+        # 捕获任务开始时的账户，避免任务中途账户被移除或切换后 MFA 信号发错对象
+        account = accounts.current
+        if account is None:
             self.error.emit(self.tr("未登录"), self.tr("请先添加一个账户"))
             self.canceled.emit()
             return
@@ -164,7 +166,7 @@ class ScheduleThread(ProcessThread):
             logger.error("服务器错误", exc_info=True)
             if e.code == 102:
                 self.error.emit(self.tr("登录问题"), self.tr("需要进行两步验证，请前往账户界面，选择对应账户进行验证。"))
-                accounts.current.MFASignal.emit(True)
+                request_mfa(account)
             else:
                 self.error.emit(self.tr("服务器错误"), e.message)
             self.canceled.emit()

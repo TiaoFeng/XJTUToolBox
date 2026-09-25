@@ -6,7 +6,7 @@ from PyQt5.QtCore import pyqtSignal
 from auth import ServerError
 from lms import LMSUtil
 from .ProcessWidget import ProcessThread
-from ..utils import accounts, logger
+from ..utils import accounts, logger, request_mfa
 from ..utils.mfa import MFACancelledError, MFAUnavailableError
 from ..utils.qrcode_login import QRCodeLoginCancelledError, QRCodeLoginUnavailableError
 
@@ -65,7 +65,9 @@ class LMSThread(ProcessThread):
         :return: 无返回值。结果通过 Qt 信号异步发回 UI 层。
         """
         self.can_run = True
-        if accounts.current is None:
+        # 捕获任务开始时的账户，避免任务中途账户被移除或切换后 MFA 信号发错对象
+        account = accounts.current
+        if account is None:
             self.error.emit(self.tr("未登录"), self.tr("请先添加一个账户"))
             self.canceled.emit()
             return
@@ -134,7 +136,7 @@ class LMSThread(ProcessThread):
             logger.error("服务器错误", exc_info=True)
             if e.code == 102:
                 self.error.emit(self.tr("登录问题"), self.tr("需要进行两步验证，请前往账户界面，选择对应账户进行验证。"))
-                accounts.current.MFASignal.emit(True)
+                request_mfa(account)
             else:
                 self.error.emit(self.tr("服务器错误"), e.message)
             self.canceled.emit()
