@@ -7,7 +7,7 @@ from auth import ServerError
 from jwxt.empty_room import EmptyRoom
 from ..sessions.jwxt_session import JWXTSession
 from ..threads.ProcessWidget import ProcessThread
-from ..utils import accounts, logger, cfg
+from ..utils import accounts, logger, cfg, request_mfa
 from ..utils.cache import CacheManager
 from ..utils.mfa import MFACancelledError, MFAUnavailableError
 from ..utils.qrcode_login import QRCodeLoginCancelledError, QRCodeLoginUnavailableError
@@ -59,8 +59,10 @@ class EmptyRoomThread(ProcessThread):
     def run(self):
         # 强制重置可运行状态
         self.can_run = True
+        # 捕获任务开始时的账户，避免任务中途账户被移除或切换后 MFA 信号发错对象
+        account = accounts.current
         # 判断当前是否存在账户
-        if accounts.current is None:
+        if account is None:
             self.error.emit(self.tr("未登录"), self.tr("请先添加一个账户"))
             self.canceled.emit()
             return
@@ -179,7 +181,7 @@ class EmptyRoomThread(ProcessThread):
             logger.error("服务器错误", exc_info=True)
             if e.code == 102:
                 self.error.emit(self.tr("登录问题"), self.tr("需要进行两步验证，请前往账户界面，选择对应账户进行验证。"))
-                accounts.current.MFASignal.emit(True)
+                request_mfa(account)
             else:
                 self.error.emit(self.tr("服务器错误"), e.message)
             self.canceled.emit()
