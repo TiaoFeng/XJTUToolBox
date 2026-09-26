@@ -158,7 +158,8 @@ class RunGuardGrandChildThread(RunGuardChildThread):
 class ProcessThreadRunGuardTest(unittest.TestCase):
     """ProcessThread 兜底子类 run() 中未捕获的异常。"""
 
-    def _guard_thread(self, error=None):
+    @staticmethod
+    def _guard_thread(error=None):
         thread = RunGuardThread(error)
         events = []
         thread.error.connect(lambda title, detail: events.append(("error", title, detail)))
@@ -235,6 +236,25 @@ class ProcessThreadRunGuardTest(unittest.TestCase):
         self.assertEqual(type(thread).run.__name__, "run")
         original = type(thread).run.__wrapped__
         self.assertFalse(getattr(original, "_process_thread_guarded", False))
+
+
+class ProcessThreadRunGuardWidgetTest(ProcessWidgetTestBase):
+    """run() 异常兜底触发后，挂载的 ProcessWidget 经 canceled 收尾且不重复上报。"""
+
+    def test_guarded_crash_ends_widget_via_canceled(self):
+        thread, _ = ProcessThreadRunGuardTest._guard_thread(ValueError("boom"))
+        widget = self.make_process_widget(thread, stoppable=True, hide_on_end=False)
+        canceled, finished = [], []
+        widget.canceled.connect(lambda: canceled.append(True))
+        widget.finished.connect(lambda: finished.append(True))
+
+        thread.start()
+        self.assertTrue(thread.wait(5000))
+        APP.processEvents()  # 交付 error/canceled 与 QThread.finished
+
+        self.assertEqual(canceled, [True])
+        self.assertEqual(finished, [])
+        self.assertFalse(widget.timer.isActive())
 
 
 if __name__ == "__main__":
