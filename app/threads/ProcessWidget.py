@@ -220,8 +220,13 @@ class ProcessThread(QThread):
                 run(self)
             except Exception as error:
                 self.can_run = False
+                # 返回 -1 的场景（PyPrepared 预置连接）Python 侧不可构造，不影响 == 0 判断。
                 if self.receivers(self.error) == 0:
-                    # 没有接收者时冒泡给 PyQt 全局异常处理，保留可见的错误提示
+                    # 没有接收者时冒泡给 PyQt 全局异常处理（MainWindow 弹原始 traceback），保留可见的错误提示；
+                    # 先写入日志再 raise，保证日志系统同样保留异常记录。
+                    logger.error(
+                        "%s 后台任务失败：%s（error 无接收者，转交全局异常处理）",
+                        type(self).__name__, type(error).__name__, exc_info=True)
                     raise
                 self._report_run_error(error)
 
@@ -231,7 +236,7 @@ class ProcessThread(QThread):
     def _report_run_error(self, error: Exception) -> None:
         kind = type(error).__name__
         detail = str(error).strip() or kind
-        logger.error("后台任务失败：%s", kind, exc_info=True)
+        logger.error("%s 后台任务失败：%s", type(self).__name__, kind, exc_info=True)  # 携带线程名称
         self.error.emit(self.tr("操作失败"), detail)
         self.canceled.emit()
 

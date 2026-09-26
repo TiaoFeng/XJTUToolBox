@@ -219,6 +219,13 @@ class ProcessThreadRunGuardTest(unittest.TestCase):
 
         self.assertEqual(events, [("error", "操作失败", "inherited"), ("canceled",)])
 
+    def test_receivers_api_available(self):
+        thread = RunGuardThread()
+        # 确保 receivers() 的可用性与语义正确：若移除该 API 时在此处报错
+        self.assertEqual(thread.receivers(thread.error), 0)
+        thread.error.connect(lambda *a: None)
+        self.assertGreater(thread.receivers(thread.error), 0)
+
     def test_redefined_run_is_wrapped_exactly_once(self):
         thread, events = self._observe(RunGuardGrandChildThread())
 
