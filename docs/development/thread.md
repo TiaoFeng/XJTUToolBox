@@ -177,8 +177,10 @@ else:
     self.hasFinished.emit()
 ```
 
-子类 `run()` 中未被捕获的异常由 `ProcessThread` 基类统一捕获：基类会记录带异常类型的日志（含完整 traceback），并依次发出 `error` 与 `canceled`。兜底时错误标题固定为“操作失败”，正文取 `str(error)`；异常信息为空时回退为异常类型名（例如 `ValueError()`），保证界面不会显示空正文。兜底后会把 `can_run` 置为 `False`。
-如果线程的 `error` 信号没有任何接收者，基类不会吞掉异常，而是重新抛出交给 PyQt 的全局异常处理（配合 `MainWindow` 的 `sys.excepthook` 弹出错误对话框），避免线程失败后界面完全无提示。
+子类 `run()` 中未被捕获的异常由 `ProcessThread` 基类统一捕获：基类会记录带异常类型的日志（含完整 traceback），并依次发出 `error` 与 `canceled`。兜底时错误标题固定为“操作失败”，正文取 `str(error)`；异常信息为空时回退为异常类型名（例如 `ValueError()`）。兜底后会把 `can_run` 置为 `False`。
+若线程的 `error` 信号无接收者，基类会重新抛出交给 PyQt 的全局异常处理（配合 `MainWindow` 的 `sys.excepthook` 弹出错误对话框）。
+> 回退路径依赖 `MainWindow.__init__` 已安装的全局 excepthook（未安装时 PyQt5 对逃逸的子线程异常会直接终止进程）；因此不要在应用初始化完成之前启动 `ProcessThread` 子类线程。由测试 `test/app/test_thread_run_guard_invariants.py` 保证。
+
 **注意**：兜底只用于处理漏网之鱼，可预期的失败**应该**在线程内处理，以便回报更准确的错误信息；业务界面也**应该**连接 `error` 以走自己的错误提示。
 
 界面层通常把 `error` 连接到 InfoBar、MessageBox 或自定义错误处理槽函数。
