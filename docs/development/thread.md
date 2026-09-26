@@ -184,9 +184,9 @@ else:
 - 若异常发生时线程的 `error` 信号**没有外部接收者**（含运行中被断开）：
     - 只记录日志，并调用 `sys.excepthook`，交给全局异常处理（即 `MainWindow` 的错误对话框），不补发 `error` 或  `canceled`；此时界面收尾由 `ProcessWidget` 基于 `QThread.finished` 的兜底完成。
     - 该规则优先于以下全部规则：即使异常前已发出结束信号，错误也不会静默。
-- 异常前未发出 `error`：依次发出 `error` 与 `canceled`。错误标题固定为“操作失败”，正文取 `str(error)`；异常信息为空时回退为异常类型名（例如 `ValueError()`）。
-- 异常前已发出 `error`：只补发 `canceled`，不重复上报 `error`。
 - 异常前已发出 `hasFinished` 或 `canceled`：只记录日志，不补发任务信号。
+- 异常前已发出 `error`：只补发 `canceled`，不重复上报 `error`。
+- 其余情况（异常前未发出任何任务信号）：依次发出 `error` 与 `canceled`。错误标题固定为“操作失败”，正文取 `str(error)`；异常信息为空时回退为异常类型名（例如 `ValueError()`）。
 
 兜底后会把 `can_run` 置为 `False`。无接收者路径直接调用 `sys.excepthook` 而不 `raise`：异常没有逃出 `QThread.run()`，因此不会触发 PyQt5 对未处理子线程异常的进程终止行为，也不依赖 `MainWindow` 是否已安装 excepthook。
 

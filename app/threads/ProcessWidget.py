@@ -212,17 +212,17 @@ class ProcessThread(QThread):
     def __init_subclass__(cls, **kwargs):
         """子类 run() 统一兜底：漏网之鱼按下面的规则转成信号，子类不需要改名或包裹。
 
-        ## 上报规则（按优先级排列； err 接收者数量在异常发生时判定）
+        ## 上报规则（按优先级排列；error 接收者数量在异常发生时判定）
         - 无外部 error 接收者（含运行中被断开）：
             - 只记录日志并交给 sys.excepthook，不补发任务信号；
             该规则优先于以下全部规则：
-            即使异常前已发出结束信号，无接受者导致无人能看到错误，须保留全局异常提示；
-        - 异常前未发出 error：
-            - 依次发出 error 与 canceled；
+            即使异常前已发出结束信号，无接收者导致无人能看到错误，须保留全局异常提示；
+        - 异常前已发出 hasFinished/canceled：
+            - 只记录日志；
         - 异常前已发出 error：
             - 只补发 canceled，不重复上报 error；
-        - 异常前已发出 hasFinished/canceled：
-            - 只记录日志。
+        - 其余情况（异常前未发出任何任务信号）：
+            - 依次发出 error 与 canceled。
 
         ## 注意
         子类 run() 不应调用 super().run() 复用父类实现：父类的包装会先报告失败并正常返回，
@@ -303,7 +303,7 @@ class ProcessThread(QThread):
         """断开兜底标记连接：支持重复调用、未初始化与对象已销毁等情形。
 
         强杀（terminate）不会执行 guarded_run 的 finally，残留连接由下一次 run 启动前调用本方法清理。
-        
+
         disconnect 可能因连接被外部移除（TypeError）或 C++ 对象已销毁（RuntimeError）而失败：兜底本身不能抛出新的异常。
         """
         marks = getattr(self, "_run_marks", None) or ()
@@ -320,7 +320,7 @@ class ProcessThread(QThread):
 
         内部标记连接会让 receivers() 至少为 1，直接计数会把标记当成业务接收者；
         这里先断开标记再计数。
-        
+
         标记也可能已被外部整体 disconnect() 一并移除（如账号切换），
         此时 disconnect 抛 TypeError，剩余数量即外部接收者数量。
         该计数不能缓存：界面会在运行期新增或断开连接。
