@@ -194,6 +194,8 @@ class ProcessThread(QThread):
         self.can_run = True
         # 兜底上报的临时标记连接；terminate() 强杀后可能残留，由下一次 run 启动前清理
         self._run_marks = None
+        # 本次 run 的 error 标记连接：异常发生时用于把它从 receivers() 计数中剔除
+        self._run_error_mark = None
 
     progressChanged = pyqtSignal(int)
     messageChanged = pyqtSignal(str)
@@ -210,11 +212,17 @@ class ProcessThread(QThread):
     def __init_subclass__(cls, **kwargs):
         """子类 run() 统一兜底：漏网之鱼按下面的规则转成信号，子类不需要改名或包裹。
 
-        ## 上报规则（存在外部 error 接收者时）
-        - 异常前未发出 error：依次发出 error 与 canceled；
-        - 异常前已发出 error：只补 canceled，不重复上报 error；
-        - 异常前已发出 hasFinished/canceled：只记录日志；
-        - 无外部 error 接收者：只记录日志并交给 sys.excepthook，不补发任务信号。
+        ## 上报规则（按优先级排列； err 接收者数量在异常发生时判定）
+        - 无外部 error 接收者（含运行中被断开）：
+            - 只记录日志并交给 sys.excepthook，不补发任务信号；
+            该规则优先于以下全部规则：
+            即使异常前已发出结束信号，无接受者导致无人能看到错误，须保留全局异常提示；
+        - 异常前未发出 error：
+            - 依次发出 error 与 canceled；
+        - 异常前已发出 error：
+            - 只补发 canceled，不重复上报 error；
+        - 异常前已发出 hasFinished/canceled：
+            - 只记录日志。
 
         ## 注意
         子类 run() 不应调用 super().run() 复用父类实现：父类的包装会先报告失败并正常返回，
@@ -243,17 +251,16 @@ class ProcessThread(QThread):
                     reported.add(name)
                 return _slot
 
+            error_mark = _mark("error")
             marks = [
                 (self.hasFinished, _mark("hasFinished")),
                 (self.canceled, _mark("canceled")),
-                (self.error, _mark("error")),
+                (self.error, error_mark),
             ]
-            # 须在连接标记之前采样：error 的标记连接会让 receivers(self.error) 至少为 1，
-            # 而该计数仅用于判断 error 是否无人接收。
-            # receivers() 返回 -1 的场景（PyPrepared预置连接）Python 侧不可构造，不影响 == 0 判断。
-            error_receivers = self.receivers(self.error)
             # 先登记再连接：即使连接过程中被强杀，下一次 run 也能按登记的标记清理干净。
             self._run_marks = marks
+            # error 标记单独保存：异常发生瞬间用它把内部连接从 receivers() 计数中剔除。
+            self._run_error_mark = error_mark
             # DirectConnection 保证标记在 worker 线程内同步可见：兜底在 run() 返回后立即读取。
             for signal, slot in marks:
                 signal.connect(slot, Qt.DirectConnection)
@@ -261,22 +268,23 @@ class ProcessThread(QThread):
                 run(self)
             except Exception as error:  # noqa: BLE001
                 self.can_run = False
-                if reported & {"hasFinished", "canceled"}:
-                    logger.error(
-                        "%s 后台任务在已发出结束/错误信号（%s）后仍抛出异常：%s",
-                        type(self).__name__, "、".join(sorted(reported)),
-                        type(error).__name__, exc_info=True)
-                    return
-                if error_receivers == 0:
-                    # 没有接收者时交给全局异常处理（MainWindow 弹原始 traceback），保留错误提示；
+                if self._external_error_receiver_count() == 0:
+                    # 此刻没有外部接收者：错误交给全局异常处理（MainWindow 弹原始 traceback），
+                    # 否则此失败只会留在日志里。该判断优先于「已发出结束信号」。
                     # 此路径不补发 error/canceled，界面收尾由 ProcessWidget 基于 QThread.finished 的兜底完成。
                     # 直接调用 sys.excepthook 不使用 raise：PyQt5 对逃逸的子线程异常在
                     # sys.excepthook 为默认实现时会 qFatal 终止整个进程；直接调用同样保留
                     # 全局弹窗，且不依赖 hook 是否安装。
                     logger.error(
-                        "%s 后台任务失败：%s（error 无接收者，转交全局异常处理）",
+                        "%s 后台任务失败：%s（error 无外部接收者，转交全局异常处理）",
                         type(self).__name__, type(error).__name__, exc_info=True)
                     sys.excepthook(type(error), error, error.__traceback__)
+                    return
+                if reported & {"hasFinished", "canceled"}:
+                    logger.error(
+                        "%s 后台任务在已发出结束/错误信号（%s）后仍抛出异常：%s",
+                        type(self).__name__, "、".join(sorted(reported)),
+                        type(error).__name__, exc_info=True)
                     return
                 if "error" in reported:
                     # 业务代码已经上报过错误：只补发结束信号。
@@ -300,11 +308,38 @@ class ProcessThread(QThread):
         """
         marks = getattr(self, "_run_marks", None) or ()
         self._run_marks = None
+        self._run_error_mark = None
         for signal, slot in marks:
             try:
                 signal.disconnect(slot)
             except (TypeError, RuntimeError):
                 pass
+
+    def _external_error_receiver_count(self) -> int:
+        """异常发生时，统计 error 的外部接收者数量（剔除本次 run 的内部标记连接）。
+
+        内部标记连接会让 receivers() 至少为 1，直接计数会把标记当成业务接收者；
+        这里先断开标记再计数。
+        
+        标记也可能已被外部整体 disconnect() 一并移除（如账号切换），
+        此时 disconnect 抛 TypeError，剩余数量即外部接收者数量。
+        该计数不能缓存：界面会在运行期新增或断开连接。
+
+        receivers() 返回 0 或负值（Qt 对未知情形的返回值）时按 0 处理，显式提示异常。
+        """
+        total = self.receivers(self.error)
+        if total <= 0:
+            return 0
+        if self._run_error_mark is not None:
+            mark = self._run_error_mark
+            self._run_error_mark = None
+            try:
+                self.error.disconnect(mark)
+            except TypeError:
+                pass  # 标记已随外部整体断开被移除：total 即外部数量
+            else:
+                total -= 1  # 剔除仍在连接的内部标记
+        return max(0, total)
 
     def _report_run_error(self, error: Exception) -> None:
         kind = type(error).__name__

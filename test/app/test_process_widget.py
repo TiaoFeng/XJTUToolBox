@@ -193,6 +193,39 @@ class RunGuardErrorThenRaiseThread(ProcessThread):
         raise ValueError("after-error")
 
 
+class RunGuardNoReceiverEndedThread(ProcessThread):
+    """run() 先发出指定的结束/错误信号（可不发），再抛出漏网异常；调用方不连接任何接收者。"""
+
+    def __init__(self, emit_error=False, emit_canceled=False, emit_finished=False):
+        super().__init__()
+        self.emit_error = emit_error
+        self.emit_canceled = emit_canceled
+        self.emit_finished = emit_finished
+
+    def run(self):
+        if self.emit_error:
+            self.error.emit("操作失败", "业务已上报")
+        if self.emit_canceled:
+            self.canceled.emit()
+        if self.emit_finished:
+            self.hasFinished.emit()
+        raise ValueError("after-end")
+
+
+class RunGuardWaitThenRaiseThread(ProcessThread):
+    """run() 等待测试释放，期间允许测试改动 error 连接，随后抛出异常。"""
+
+    def __init__(self):
+        super().__init__()
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def run(self):
+        self.entered.set()
+        self.release.wait(5)
+        raise ValueError("after-disconnect")
+
+
 class ReusableRunGuardThread(ProcessThread):
     """可复用线程：hang=True 时挂起等待强杀，否则等待 release 后正常结束。"""
 
@@ -323,7 +356,7 @@ class ProcessThreadRunGuardTerminateTest(unittest.TestCase):
     def _start_and_wait_entered(self):
         self.thread.entered.clear()
         self.thread.start()
-        self.assertTrue(self.thread.entered.wait(5000))
+        self.assertTrue(self.thread.entered.wait(5))
 
     def _assert_single_mark(self):
         # 运行中包装器恰好连接一个标记；强杀残留若未清理，这里会变成 2、3
@@ -394,10 +427,13 @@ class ProcessThreadRunGuardAlreadyEndedTest(unittest.TestCase):
         self.assertEqual(events, [("canceled",)])
 
     def test_end_markers_are_disconnected_after_run(self):
-        thread = RunGuardEndedThread("canceled")  # 不连接接收者，只看标记是否清理
+        # 不连接接收者：新规则下异常交给全局处理，这里同时确认标记已清理
+        thread = RunGuardEndedThread("canceled")
 
-        thread.run()
+        with patch("sys.excepthook") as hook:
+            thread.run()
 
+        hook.assert_called_once()
         self.assertEqual(thread.receivers(thread.canceled), 0)
         self.assertEqual(thread.receivers(thread.hasFinished), 0)
         self.assertEqual(thread.receivers(thread.error), 0)
@@ -461,6 +497,102 @@ class ProcessThreadRunGuardErrorReportedTest(unittest.TestCase):
         self.assertEqual(thread.receivers(thread.error), 1)
         self.assertEqual(thread.receivers(thread.canceled), 1)
         self.assertEqual(thread.receivers(thread.hasFinished), 1)
+
+
+class ProcessThreadRunGuardNoReceiverTest(unittest.TestCase):
+    """异常发生瞬间无外部 error 接收者：已发出的结束信号不会让异常静默。"""
+
+    def test_error_and_canceled_before_raise_reach_global_hook(self):
+        thread = RunGuardNoReceiverEndedThread(emit_error=True, emit_canceled=True)
+
+        with patch("sys.excepthook") as hook:
+            thread.run()
+
+        hook.assert_called_once()
+        self.assertIs(hook.call_args.args[0], ValueError)
+        self.assertFalse(thread.can_run)
+
+    def test_has_finished_before_raise_reaches_global_hook(self):
+        thread = RunGuardNoReceiverEndedThread(emit_finished=True)
+
+        with patch("sys.excepthook") as hook:
+            thread.run()
+
+        hook.assert_called_once()
+        self.assertFalse(thread.can_run)
+
+    def test_plain_raise_without_receivers_leaves_no_marks(self):
+        thread = RunGuardNoReceiverEndedThread()
+
+        with patch("sys.excepthook") as hook:
+            thread.run()
+
+        hook.assert_called_once()
+        self.assertEqual(thread.receivers(thread.error), 0)
+        self.assertEqual(thread.receivers(thread.canceled), 0)
+        self.assertEqual(thread.receivers(thread.hasFinished), 0)
+
+
+class ProcessThreadRunGuardReceiverTopologyTest(unittest.TestCase):
+    """运行期 error 接收者拓扑变化：兜底按异常发生瞬间的外部接收者判定。"""
+
+    def _run_while_mutating(self, mutate, connect_before_start=True):
+        """启动线程，等 run 进入后执行 mutate(thread, handler)，再释放并等待线程退出。"""
+        thread = RunGuardWaitThenRaiseThread()
+        received = []
+        handler = lambda title, detail: received.append((title, detail))
+        if connect_before_start:
+            thread.error.connect(handler)
+
+        with patch("sys.excepthook") as hook:
+            thread.start()
+            self.assertTrue(thread.entered.wait(5))
+            mutate(thread, handler)
+            thread.release.set()
+            self.assertTrue(thread.wait(5000))
+            APP.processEvents()  # 派发排队到主线程的 error/canceled 信号调用
+
+        return thread, received, hook
+
+    def test_full_disconnect_during_run_goes_to_global_hook(self):
+        # 启动时有接收者，运行中整体断开（含兜底标记），如账号切换的 _cleanupThread
+        _, received, hook = self._run_while_mutating(lambda t, h: t.error.disconnect())
+
+        self.assertEqual(received, [])
+        hook.assert_called_once()
+        self.assertIs(hook.call_args.args[0], ValueError)
+
+    def test_targeted_disconnect_during_run_goes_to_global_hook(self):
+        # 定向移除业务接收者，兜底标记仍在：内部标记必须先剔除再判定
+        _, received, hook = self._run_while_mutating(lambda t, h: t.error.disconnect(h))
+
+        self.assertEqual(received, [])
+        hook.assert_called_once()
+
+    def test_receiver_added_during_run_receives_signals(self):
+        # 启动时无接收者，运行中新增：异常应走信号上报而不是全局处理
+        _, received, hook = self._run_while_mutating(
+            lambda t, h: t.error.connect(h), connect_before_start=False)
+
+        self.assertEqual(received, [("操作失败", "after-disconnect")])
+        hook.assert_not_called()
+
+    def test_reconnect_after_full_disconnect_receives_signals(self):
+        # 账号切换拓扑：整体断开（标记一并移除）后重连新接收者，仍应走信号上报
+        thread = RunGuardWaitThenRaiseThread()
+        received = []
+
+        with patch("sys.excepthook") as hook:
+            thread.start()
+            self.assertTrue(thread.entered.wait(5))
+            thread.error.disconnect()
+            thread.error.connect(lambda title, detail: received.append((title, detail)))
+            thread.release.set()
+            self.assertTrue(thread.wait(5000))
+            APP.processEvents()  # 派发排队到主线程的 error/canceled 信号调用
+
+        self.assertEqual(received, [("操作失败", "after-disconnect")])
+        hook.assert_not_called()
 
 
 class ProcessThreadRunGuardWidgetTest(ProcessWidgetTestBase):
