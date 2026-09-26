@@ -192,6 +192,8 @@ class ProcessThread(QThread):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.can_run = True
+        # 兜底上报的临时标记连接；terminate() 强杀后可能残留，由下一次 run 启动前清理
+        self._run_marks = None
 
     progressChanged = pyqtSignal(int)
     messageChanged = pyqtSignal(str)
@@ -206,7 +208,13 @@ class ProcessThread(QThread):
         self.can_run = False
 
     def __init_subclass__(cls, **kwargs):
-        """子类 run() 统一兜底：漏网之鱼转成 error + canceled，子类不需要改名或包裹。
+        """子类 run() 统一兜底：漏网之鱼按下面的规则转成信号，子类不需要改名或包裹。
+
+        ## 上报规则（存在外部 error 接收者时）
+        - 异常前未发出 error：依次发出 error 与 canceled；
+        - 异常前已发出 error：只补 canceled，不重复上报 error；
+        - 异常前已发出 hasFinished/canceled：只记录日志；
+        - 无外部 error 接收者：只记录日志并交给 sys.excepthook，不补发任务信号。
 
         ## 注意
         子类 run() 不应调用 super().run() 复用父类实现：父类的包装会先报告失败并正常返回，
@@ -222,9 +230,12 @@ class ProcessThread(QThread):
             # 线程入口的最后兜底：业务异常无法枚举（标注 noqa 消除 Ruff 提示），在此统一捕获而不是让它冒至全局
             # sys.excepthook；SystemExit / KeyboardInterrupt 继承 BaseException，会照常穿透。
             #
-            # 本次 run 已发出的结束信号会被临时标记下来：异常若发生在报告结束之后，只记日志、不再补发
-            # error/canceled，避免重复或「成功后失败」的矛盾上报。不要把标记挂到 error 上，
-            # 否则会污染下方 receivers(self.error) 的接收者计数。
+            # 上一次 run 若被 terminate() 强杀，finally 不会执行，标记连接会残留；
+            # 复用线程前须先清理。
+            self._disconnect_run_marks()
+
+            # 本次 run 已发出的结束/错误信号会被临时标记下来：异常若发生在报告之后，
+            # 按下面的规则只记日志或只补结束信号。
             reported: set[str] = set()
 
             def _mark(name):
@@ -235,7 +246,14 @@ class ProcessThread(QThread):
             marks = [
                 (self.hasFinished, _mark("hasFinished")),
                 (self.canceled, _mark("canceled")),
+                (self.error, _mark("error")),
             ]
+            # 须在连接标记之前采样：error 的标记连接会让 receivers(self.error) 至少为 1，
+            # 而该计数仅用于判断 error 是否无人接收。
+            # receivers() 返回 -1 的场景（PyPrepared预置连接）Python 侧不可构造，不影响 == 0 判断。
+            error_receivers = self.receivers(self.error)
+            # 先登记再连接：即使连接过程中被强杀，下一次 run 也能按登记的标记清理干净。
+            self._run_marks = marks
             # DirectConnection 保证标记在 worker 线程内同步可见：兜底在 run() 返回后立即读取。
             for signal, slot in marks:
                 signal.connect(slot, Qt.DirectConnection)
@@ -243,15 +261,15 @@ class ProcessThread(QThread):
                 run(self)
             except Exception as error:  # noqa: BLE001
                 self.can_run = False
-                if reported:
+                if reported & {"hasFinished", "canceled"}:
                     logger.error(
-                        "%s 后台任务在已发出结束信号（%s）后仍抛出异常：%s",
+                        "%s 后台任务在已发出结束/错误信号（%s）后仍抛出异常：%s",
                         type(self).__name__, "、".join(sorted(reported)),
                         type(error).__name__, exc_info=True)
                     return
-                # receivers() 返回 -1 的场景（PyPrepared 预置连接）Python 侧不可构造，不影响 == 0 判断。
-                if self.receivers(self.error) == 0:
-                    # 没有接收者时交给全局异常处理（MainWindow 弹原始 traceback），保留错误提示。
+                if error_receivers == 0:
+                    # 没有接收者时交给全局异常处理（MainWindow 弹原始 traceback），保留错误提示；
+                    # 此路径不补发 error/canceled，界面收尾由 ProcessWidget 基于 QThread.finished 的兜底完成。
                     # 直接调用 sys.excepthook 不使用 raise：PyQt5 对逃逸的子线程异常在
                     # sys.excepthook 为默认实现时会 qFatal 终止整个进程；直接调用同样保留
                     # 全局弹窗，且不依赖 hook 是否安装。
@@ -260,24 +278,46 @@ class ProcessThread(QThread):
                         type(self).__name__, type(error).__name__, exc_info=True)
                     sys.excepthook(type(error), error, error.__traceback__)
                     return
+                if "error" in reported:
+                    # 业务代码已经上报过错误：只补发结束信号。
+                    self._finish_run_after_reported_error(error)
+                    return
                 self._report_run_error(error)
             finally:
-                # 强杀（terminate）不会执行到这里，残留标记只写旧的 reported，不影响下一次 run。
-                # disconnect 可能因连接被外部移除或 C++ 对象销毁而失败：兜底本身不能抛出异常。
-                for signal, slot in marks:
-                    try:
-                        signal.disconnect(slot)
-                    except (TypeError, RuntimeError):
-                        pass
+                # 强杀（terminate）不会执行到这里；
+                # 残留标记由下一次 run 启动前的清理兜底。
+                self._disconnect_run_marks()
 
         guarded_run._process_thread_guarded = True
         cls.run = guarded_run
+
+    def _disconnect_run_marks(self) -> None:
+        """断开兜底标记连接：支持重复调用、未初始化与对象已销毁等情形。
+
+        强杀（terminate）不会执行 guarded_run 的 finally，残留连接由下一次 run 启动前调用本方法清理。
+        
+        disconnect 可能因连接被外部移除（TypeError）或 C++ 对象已销毁（RuntimeError）而失败：兜底本身不能抛出新的异常。
+        """
+        marks = getattr(self, "_run_marks", None) or ()
+        self._run_marks = None
+        for signal, slot in marks:
+            try:
+                signal.disconnect(slot)
+            except (TypeError, RuntimeError):
+                pass
 
     def _report_run_error(self, error: Exception) -> None:
         kind = type(error).__name__
         detail = str(error).strip() or kind
         logger.error("%s 后台任务失败：%s", type(self).__name__, kind, exc_info=True)  # 携带线程名称
         self.error.emit(self.tr("操作失败"), detail)
+        self.canceled.emit()
+
+    def _finish_run_after_reported_error(self, error: Exception) -> None:
+        """业务代码已上报 error 后异常退出：只补发 canceled，避免重复上报同一次失败。"""
+        logger.error(
+            "%s 后台任务在已上报错误后仍抛出异常：%s（补发 canceled）",
+            type(self).__name__, type(error).__name__, exc_info=True)
         self.canceled.emit()
 
 

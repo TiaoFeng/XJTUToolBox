@@ -141,6 +141,8 @@ self.messageChanged.emit(self.tr("正在登录教务系统..."))
 
 默认 `thread_dead_time` 为 5 秒。线程可以通过 `deadTime.emit(seconds)` 调整等待时间。下载、大文件处理或长请求任务可以适当延长这个时间。
 
+`terminate()` 是最后的兜底手段：被强杀的线程不会执行 Python 清理代码（如 `finally`）。基类为兜底上报建立的临时信号连接会在下一次 `start()` 前清理，不会随线程复用累积；但业务代码仍应尽量响应 `can_run`/退出信号并自行收尾，避免依赖强杀。
+
 确定进度条在取消等待阶段会显示倒退动画。`ProcessWidget(backward_animation=False)` 可以关闭该动画。
 
 ## 错误处理约定
@@ -177,8 +179,14 @@ else:
     self.hasFinished.emit()
 ```
 
-子类 `run()` 中未被捕获的异常由 `ProcessThread` 基类统一捕获：基类会记录带异常类型的日志（含完整 traceback），并依次发出 `error` 与 `canceled`。兜底时错误标题固定为“操作失败”，正文取 `str(error)`；异常信息为空时回退为异常类型名（例如 `ValueError()`）。兜底后会把 `can_run` 置为 `False`；若异常发生在 `run()` 已发出 `hasFinished` 或 `canceled` 之后，基类只记录日志，不补发任务信号，避免重复或相互矛盾的结束上报。
-若线程的 `error` 信号无接收者，基类会直接调用 `sys.excepthook`，交给全局异常处理（即 `MainWindow` 的错误对话框）。异常没有逃出 `QThread.run()`，因此不会触发 PyQt5 对未处理子线程异常的进程终止行为，也不依赖 `MainWindow` 是否已安装 excepthook。
+子类 `run()` 中未被捕获的异常由 `ProcessThread` 基类统一捕获：基类会记录带异常类型的日志（含完整 traceback）。兜底上报规则如下：
+
+- 异常前未发出 `error`：依次发出 `error` 与 `canceled`。错误标题固定为“操作失败”，正文取 `str(error)`；异常信息为空时回退为异常类型名（例如 `ValueError()`）。
+- 异常前已发出 `error`：只补发 `canceled`，不重复上报 `error`。
+- 异常前已发出 `hasFinished` 或 `canceled`：只记录日志，不补发任务信号。
+- 若线程的 `error` 信号无接收者：只记录日志，并调用 `sys.excepthook`，交给全局异常处理（即 `MainWindow` 的错误对话框），不补发 `error` 或 `canceled`；此时界面收尾由 `ProcessWidget` 基于 `QThread.finished` 的兜底完成。
+
+兜底后会把 `can_run` 置为 `False`。无接收者路径直接调用 `sys.excepthook` 而不 `raise`：异常没有逃出 `QThread.run()`，因此不会触发 PyQt5 对未处理子线程异常的进程终止行为，也不依赖 `MainWindow` 是否已安装 excepthook。
 
 **注意**：兜底只用于处理漏网之鱼，可预期的失败**应该**在线程内处理，以便回报更准确的错误信息；业务界面也**应该**连接 `error` 以走自己的错误提示。
 
