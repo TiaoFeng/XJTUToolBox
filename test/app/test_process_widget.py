@@ -2,6 +2,7 @@ import os
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 TEST_DOMAIN = "qt-ui"
 TEST_REGRESSION = True
@@ -155,17 +156,18 @@ class RunGuardGrandChildThread(RunGuardChildThread):
         raise ValueError("grand-child")
 
 
+def make_guarded_thread(error=None):
+    """构造 run() 抛异常的线程，并记录 error/canceled/hasFinished 事件。"""
+    thread = RunGuardThread(error)
+    events = []
+    thread.error.connect(lambda title, detail: events.append(("error", title, detail)))
+    thread.canceled.connect(lambda: events.append(("canceled",)))
+    thread.hasFinished.connect(lambda: events.append(("finished",)))
+    return thread, events
+
+
 class ProcessThreadRunGuardTest(unittest.TestCase):
     """ProcessThread 兜底子类 run() 中未捕获的异常。"""
-
-    @staticmethod
-    def _guard_thread(error=None):
-        thread = RunGuardThread(error)
-        events = []
-        thread.error.connect(lambda title, detail: events.append(("error", title, detail)))
-        thread.canceled.connect(lambda: events.append(("canceled",)))
-        thread.hasFinished.connect(lambda: events.append(("finished",)))
-        return thread, events
 
     def _observe(self, thread):
         events = []
@@ -174,7 +176,7 @@ class ProcessThreadRunGuardTest(unittest.TestCase):
         return thread, events
 
     def test_unhandled_exception_reports_error_then_canceled(self):
-        thread, events = self._guard_thread(ValueError("boom"))
+        thread, events = make_guarded_thread(ValueError("boom"))
 
         thread.run()
 
@@ -182,14 +184,14 @@ class ProcessThreadRunGuardTest(unittest.TestCase):
         self.assertFalse(thread.can_run)
 
     def test_empty_exception_message_falls_back_to_type_name(self):
-        thread, events = self._guard_thread(ValueError())
+        thread, events = make_guarded_thread(ValueError())
 
         thread.run()
 
         self.assertEqual(events, [("error", "操作失败", "ValueError"), ("canceled",)])
 
     def test_system_exit_is_not_swallowed(self):
-        thread, events = self._guard_thread(SystemExit(0))
+        thread, events = make_guarded_thread(SystemExit(0))
 
         with self.assertRaises(SystemExit):
             thread.run()
@@ -197,7 +199,7 @@ class ProcessThreadRunGuardTest(unittest.TestCase):
         self.assertEqual(events, [])
 
     def test_started_thread_run_is_guarded_through_qt_dispatch(self):
-        thread, events = self._guard_thread(ValueError("boom"))
+        thread, events = make_guarded_thread(ValueError("boom"))
 
         thread.start()
         self.assertTrue(thread.wait(5000))
@@ -205,13 +207,15 @@ class ProcessThreadRunGuardTest(unittest.TestCase):
 
         self.assertEqual(events, [("error", "操作失败", "boom"), ("canceled",)])
 
-    def test_no_error_receiver_reraises_to_global_hook(self):
-        thread = RunGuardThread(ValueError("boom"))  # 不连接 error：异常应冒泡交给全局处理
+    def test_no_error_receiver_goes_to_global_hook(self):
+        thread = RunGuardThread(ValueError("boom"))  # 不连接 error：异常应交给全局处理
 
-        with self.assertRaises(ValueError):
+        with patch("sys.excepthook") as hook:
             thread.run()
 
         self.assertFalse(thread.can_run)
+        hook.assert_called_once()
+        self.assertIs(hook.call_args.args[0], ValueError)
 
     def test_inherited_run_is_still_guarded(self):
         thread, events = self._observe(RunGuardChildThread(ValueError("inherited")))
@@ -242,7 +246,7 @@ class ProcessThreadRunGuardWidgetTest(ProcessWidgetTestBase):
     """run() 异常兜底触发后，挂载的 ProcessWidget 经 canceled 收尾且不重复上报。"""
 
     def test_guarded_crash_ends_widget_via_canceled(self):
-        thread, _ = ProcessThreadRunGuardTest._guard_thread(ValueError("boom"))
+        thread, _ = make_guarded_thread(ValueError("boom"))
         widget = self.make_process_widget(thread, stoppable=True, hide_on_end=False)
         canceled, finished = [], []
         widget.canceled.connect(lambda: canceled.append(True))

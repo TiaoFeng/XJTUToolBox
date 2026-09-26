@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -31,14 +32,13 @@ class RunGuardThread(ProcessThread):
 
 
 class ExcepthookDispatchTest(unittest.TestCase):
-    """无接收者兜底 re-raise 后，异常经真实 Qt 分发进入 sys.excepthook 且进程存活。"""
+    """无接收者兜底直接调用 sys.excepthook，不依赖 PyQt 对逃逸异常的转发。"""
 
-    def test_unconnected_error_reraised_to_sys_excepthook_via_start(self):
+    def test_unconnected_error_reaches_sys_excepthook_via_start(self):
         seen = []
 
         def hook(ty, value, tb):
             seen.append((ty, value))
-            return sys.__excepthook__(ty, value, tb)
 
         old_hook = sys.excepthook
         sys.excepthook = hook
@@ -49,28 +49,43 @@ class ExcepthookDispatchTest(unittest.TestCase):
         finally:
             sys.excepthook = old_hook
 
-        # 兜底已执行（can_run 被置 False），re-raise 的异常被交给自定义 hook
+        # 兜底已执行（can_run 被置 False），异常被交给自定义 hook，线程正常结束
         self.assertFalse(thread.can_run)
         self.assertEqual(len(seen), 1)
         self.assertIs(seen[0][0], ValueError)
 
 
-class StartupHookOrderTest(unittest.TestCase):
-    """确保先安装全局 excepthook、再执行启动期任务的次序不被改动。
+DEFAULT_HOOK_SCRIPT = """import os
+os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QApplication
+from app.threads.ProcessWidget import ProcessThread
+QApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
+app = QApplication([])
+class T(ProcessThread):
+    def run(self):
+        raise ValueError('boom')
+t = T()
+t.start()
+assert t.wait(5000)
+print('survived')
+"""
 
-    兜底的「无接收者回退全局提示」路径依赖 MainWindow 先行安装 sys.excepthook：
-    未安装时 PyQt5 对逃逸的子线程异常会直接 qFatal 终止进程。
-    若未来把启动期任务挪到 hook 安装之前，本测试立即失败。
-    """
 
-    def test_migrate_all_runs_after_hook_installed(self):
-        source = (REPO_ROOT / "app" / "main_window.py").read_text(encoding="utf-8")
-        self.assertIn("sys.excepthook = self.catchExceptions", source)
-        self.assertIn("if migrate_all():", source)
-        self.assertLess(
-            source.index("sys.excepthook = self.catchExceptions"),
-            source.index("if migrate_all():"),
+class DefaultHookSafetyTest(unittest.TestCase):
+    """默认 sys.excepthook 下，无接收者兜底只能打印 traceback，不能终止进程。"""
+
+    def test_no_receiver_with_default_hook_does_not_abort_process(self):
+        result = subprocess.run(
+            [sys.executable, "-c", DEFAULT_HOOK_SCRIPT],
+            check=False,
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=60,
         )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("survived", result.stdout)
 
 
 if __name__ == "__main__":
