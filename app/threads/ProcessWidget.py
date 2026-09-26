@@ -221,10 +221,34 @@ class ProcessThread(QThread):
         def guarded_run(self):
             # 线程入口的最后兜底：业务异常无法枚举（标注 noqa 消除 Ruff 提示），在此统一捕获而不是让它冒至全局
             # sys.excepthook；SystemExit / KeyboardInterrupt 继承 BaseException，会照常穿透。
+            #
+            # 本次 run 已发出的结束信号会被临时标记下来：异常若发生在报告结束之后，只记日志、不再补发
+            # error/canceled，避免重复或「成功后失败」的矛盾上报。不要把标记挂到 error 上，
+            # 否则会污染下方 receivers(self.error) 的接收者计数。
+            reported: set[str] = set()
+
+            def _mark(name):
+                def _slot(*_args):
+                    reported.add(name)
+                return _slot
+
+            marks = [
+                (self.hasFinished, _mark("hasFinished")),
+                (self.canceled, _mark("canceled")),
+            ]
+            # DirectConnection 保证标记在 worker 线程内同步可见：兜底在 run() 返回后立即读取。
+            for signal, slot in marks:
+                signal.connect(slot, Qt.DirectConnection)
             try:
                 run(self)
             except Exception as error:  # noqa: BLE001
                 self.can_run = False
+                if reported:
+                    logger.error(
+                        "%s 后台任务在已发出结束信号（%s）后仍抛出异常：%s",
+                        type(self).__name__, "、".join(sorted(reported)),
+                        type(error).__name__, exc_info=True)
+                    return
                 # receivers() 返回 -1 的场景（PyPrepared 预置连接）Python 侧不可构造，不影响 == 0 判断。
                 if self.receivers(self.error) == 0:
                     # 没有接收者时交给全局异常处理（MainWindow 弹原始 traceback），保留错误提示。
@@ -237,6 +261,14 @@ class ProcessThread(QThread):
                     sys.excepthook(type(error), error, error.__traceback__)
                     return
                 self._report_run_error(error)
+            finally:
+                # 强杀（terminate）不会执行到这里，残留标记只写旧的 reported，不影响下一次 run。
+                # disconnect 可能因连接被外部移除或 C++ 对象销毁而失败：兜底本身不能抛出异常。
+                for signal, slot in marks:
+                    try:
+                        signal.disconnect(slot)
+                    except (TypeError, RuntimeError):
+                        pass
 
         guarded_run._process_thread_guarded = True
         cls.run = guarded_run

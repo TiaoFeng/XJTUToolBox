@@ -177,7 +177,7 @@ else:
     self.hasFinished.emit()
 ```
 
-子类 `run()` 中未被捕获的异常由 `ProcessThread` 基类统一捕获：基类会记录带异常类型的日志（含完整 traceback），并依次发出 `error` 与 `canceled`。兜底时错误标题固定为“操作失败”，正文取 `str(error)`；异常信息为空时回退为异常类型名（例如 `ValueError()`）。兜底后会把 `can_run` 置为 `False`。
+子类 `run()` 中未被捕获的异常由 `ProcessThread` 基类统一捕获：基类会记录带异常类型的日志（含完整 traceback），并依次发出 `error` 与 `canceled`。兜底时错误标题固定为“操作失败”，正文取 `str(error)`；异常信息为空时回退为异常类型名（例如 `ValueError()`）。兜底后会把 `can_run` 置为 `False`；若异常发生在 `run()` 已发出 `hasFinished` 或 `canceled` 之后，基类只记录日志，不补发任务信号，避免重复或相互矛盾的结束上报。
 若线程的 `error` 信号无接收者，基类会直接调用 `sys.excepthook`，交给全局异常处理（即 `MainWindow` 的错误对话框）。异常没有逃出 `QThread.run()`，因此不会触发 PyQt5 对未处理子线程异常的进程终止行为，也不依赖 `MainWindow` 是否已安装 excepthook。
 
 **注意**：兜底只用于处理漏网之鱼，可预期的失败**应该**在线程内处理，以便回报更准确的错误信息；业务界面也**应该**连接 `error` 以走自己的错误提示。
@@ -308,6 +308,7 @@ class CustomThread(ProcessThread):
 - 成功结束发出业务结果信号和 `hasFinished`。
 - 失败或取消结束发出 `canceled`。
 - `run()` 的漏网之鱼由基类兜底为 `error`/`canceled`（无接收者时回退为全局异常提示），线程实现不需要额外包裹。
+- 基类兜底只包裹 `ProcessThread` 子类自身定义的 `run()`；不要用 mixin 或创建后再赋值的方式提供 `run()`。
 - 子类 `run()` 不要用 `super().run()` 复用父类实现：基类兜底会先报告失败并正常返回，父类逻辑的失败不会再次抛出。
 - 错误信息通过 `error` 传递。
 - 可取消线程在关键步骤检查 `can_run`。

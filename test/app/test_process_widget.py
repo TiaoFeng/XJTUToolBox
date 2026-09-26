@@ -156,6 +156,29 @@ class RunGuardGrandChildThread(RunGuardChildThread):
         raise ValueError("grand-child")
 
 
+class RunGuardEndedThread(ProcessThread):
+    """run() 先发出指定结束信号（canceled/hasFinished）再抛出漏网异常。"""
+
+    def __init__(self, end=None):
+        super().__init__()
+        self.end = end
+
+    def run(self):
+        if self.end == "canceled":
+            self.canceled.emit()
+        elif self.end == "hasFinished":
+            self.hasFinished.emit()
+        raise ValueError("after-end")
+
+
+class RunGuardUnhookThread(ProcessThread):
+    """run() 先移除 canceled 上的所有连接（含兜底标记）再抛出漏网异常。"""
+
+    def run(self):
+        self.canceled.disconnect()
+        raise ValueError("unhooked")
+
+
 def make_guarded_thread(error=None):
     """构造 run() 抛异常的线程，并记录 error/canceled/hasFinished 事件。"""
     thread = RunGuardThread(error)
@@ -241,6 +264,63 @@ class ProcessThreadRunGuardTest(unittest.TestCase):
         original = type(thread).run.__wrapped__
         self.assertFalse(getattr(original, "_process_thread_guarded", False))
 
+    def test_removed_mark_connection_does_not_escape_guard(self):
+        """标记连接被外部移除时，finally 的清理不能把兜底变成新的异常源。"""
+        thread = RunGuardUnhookThread()
+        events = []
+        thread.error.connect(lambda title, detail: events.append(("error", title, detail)))
+
+        thread.run()  # 不应因清理失败抛出 TypeError
+
+        self.assertFalse(thread.can_run)
+        self.assertEqual(events, [("error", "操作失败", "unhooked")])
+
+
+class ProcessThreadRunGuardAlreadyEndedTest(unittest.TestCase):
+    """run() 已发出结束信号后再抛异常：兜底不应重复或矛盾上报。"""
+
+    def _observe(self, thread):
+        events = []
+        thread.error.connect(lambda title, detail: events.append(("error", title, detail)))
+        thread.canceled.connect(lambda: events.append(("canceled",)))
+        thread.hasFinished.connect(lambda: events.append(("finished",)))
+        return thread, events
+
+    def test_exception_after_canceled_reports_only_once(self):
+        thread, events = self._observe(RunGuardEndedThread("canceled"))
+
+        thread.run()
+
+        self.assertEqual(events, [("canceled",)])
+        self.assertFalse(thread.can_run)
+
+    def test_exception_after_has_finished_does_not_report_failure(self):
+        thread, events = self._observe(RunGuardEndedThread("hasFinished"))
+
+        thread.run()
+
+        self.assertEqual(events, [("finished",)])
+        self.assertFalse(thread.can_run)
+
+    def test_end_marker_is_synchronous_through_qt_dispatch(self):
+        # 跨线程运行时，结束信号必须在兜底读取 reported 之前同步写入标记；
+        # 否则 worker 线程读到的 reported 为空，会补发 error/canceled。
+        thread, events = self._observe(RunGuardEndedThread("canceled"))
+
+        thread.start()
+        self.assertTrue(thread.wait(5000))
+        APP.processEvents()
+
+        self.assertEqual(events, [("canceled",)])
+
+    def test_end_markers_are_disconnected_after_run(self):
+        thread = RunGuardEndedThread("canceled")  # 不连接接收者，只看标记是否清理
+
+        thread.run()
+
+        self.assertEqual(thread.receivers(thread.canceled), 0)
+        self.assertEqual(thread.receivers(thread.hasFinished), 0)
+
 
 class ProcessThreadRunGuardWidgetTest(ProcessWidgetTestBase):
     """run() 异常兜底触发后，挂载的 ProcessWidget 经 canceled 收尾且不重复上报。"""
@@ -258,6 +338,38 @@ class ProcessThreadRunGuardWidgetTest(ProcessWidgetTestBase):
 
         self.assertEqual(canceled, [True])
         self.assertEqual(finished, [])
+        self.assertFalse(widget.timer.isActive())
+
+    def test_exception_after_canceled_does_not_double_report_widget(self):
+        thread = RunGuardEndedThread("canceled")
+        thread.error.connect(lambda *_: None)  # 有接收者时兜底会补发 canceled，才能暴露重复上报
+        widget = self.make_process_widget(thread, stoppable=True, hide_on_end=False)
+        canceled, finished = [], []
+        widget.canceled.connect(lambda: canceled.append(True))
+        widget.finished.connect(lambda: finished.append(True))
+
+        thread.start()
+        self.assertTrue(thread.wait(5000))
+        APP.processEvents()  # 交付 error/canceled 与 QThread.finished
+
+        self.assertEqual(canceled, [True])
+        self.assertEqual(finished, [])
+        self.assertFalse(widget.timer.isActive())
+
+    def test_exception_after_has_finished_does_not_leave_widget_canceled(self):
+        thread = RunGuardEndedThread("hasFinished")
+        thread.error.connect(lambda *_: None)  # 有接收者时兜底才会补发 canceled，才能暴露矛盾上报
+        widget = self.make_process_widget(thread, stoppable=True, hide_on_end=False)
+        canceled, finished = [], []
+        widget.canceled.connect(lambda: canceled.append(True))
+        widget.finished.connect(lambda: finished.append(True))
+
+        thread.start()
+        self.assertTrue(thread.wait(5000))
+        APP.processEvents()  # 交付 error/canceled 与 QThread.finished
+
+        self.assertEqual(canceled, [])
+        self.assertEqual(finished, [True])
         self.assertFalse(widget.timer.isActive())
 
 
