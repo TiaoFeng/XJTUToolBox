@@ -259,7 +259,9 @@ class ProcessThreadRunGuardTest(unittest.TestCase):
 
     def _observe(self, thread):
         events = []
-        thread.error.connect(lambda title, detail: events.append(("error", title, detail)))
+        thread.error.connect(
+            lambda title, detail: events.append(("error", title, detail))
+        )
         thread.canceled.connect(lambda: events.append(("canceled",)))
         return thread, events
 
@@ -333,7 +335,9 @@ class ProcessThreadRunGuardTest(unittest.TestCase):
         """标记连接被外部移除时，finally 的清理不能把兜底变成新的异常源。"""
         thread = RunGuardUnhookThread()
         events = []
-        thread.error.connect(lambda title, detail: events.append(("error", title, detail)))
+        thread.error.connect(
+            lambda title, detail: events.append(("error", title, detail))
+        )
 
         thread.run()  # 不应因清理失败抛出 TypeError
 
@@ -394,7 +398,9 @@ class ProcessThreadRunGuardAlreadyEndedTest(unittest.TestCase):
 
     def _observe(self, thread):
         events = []
-        thread.error.connect(lambda title, detail: events.append(("error", title, detail)))
+        thread.error.connect(
+            lambda title, detail: events.append(("error", title, detail))
+        )
         thread.canceled.connect(lambda: events.append(("canceled",)))
         thread.hasFinished.connect(lambda: events.append(("finished",)))
         return thread, events
@@ -453,7 +459,9 @@ class ProcessThreadRunGuardErrorReportedTest(unittest.TestCase):
     def test_exception_after_error_reports_error_once_and_canceled(self):
         thread = RunGuardErrorThenRaiseThread()
         events = []
-        thread.error.connect(lambda title, detail: events.append(("error", title, detail)))
+        thread.error.connect(
+            lambda title, detail: events.append(("error", title, detail))
+        )
         thread.canceled.connect(lambda: events.append(("canceled",)))
         thread.hasFinished.connect(lambda: events.append(("finished",)))
 
@@ -463,7 +471,9 @@ class ProcessThreadRunGuardErrorReportedTest(unittest.TestCase):
         self.assertFalse(thread.can_run)
 
     def test_exception_after_error_without_receivers_uses_global_hook(self):
-        thread = RunGuardErrorThenRaiseThread()  # 不连接 error：内部标记不得被当成接收者
+        thread = (
+            RunGuardErrorThenRaiseThread()
+        )  # 不连接 error：内部标记不得被当成接收者
 
         with patch("sys.excepthook") as hook:
             thread.run()
@@ -476,7 +486,9 @@ class ProcessThreadRunGuardErrorReportedTest(unittest.TestCase):
     def test_error_report_is_synchronous_through_qt_dispatch(self):
         thread = RunGuardErrorThenRaiseThread()
         events = []
-        thread.error.connect(lambda title, detail: events.append(("error", title, detail)))
+        thread.error.connect(
+            lambda title, detail: events.append(("error", title, detail))
+        )
         thread.canceled.connect(lambda: events.append(("canceled",)))
 
         thread.start()
@@ -572,7 +584,8 @@ class ProcessThreadRunGuardReceiverTopologyTest(unittest.TestCase):
     def test_receiver_added_during_run_receives_signals(self):
         # 启动时无接收者，运行中新增：异常应走信号上报而不是全局处理
         _, received, hook = self._run_while_mutating(
-            lambda t, h: t.error.connect(h), connect_before_start=False)
+            lambda t, h: t.error.connect(h), connect_before_start=False
+        )
 
         self.assertEqual(received, [("操作失败", "after-disconnect")])
         hook.assert_not_called()
@@ -615,7 +628,9 @@ class ProcessThreadRunGuardWidgetTest(ProcessWidgetTestBase):
 
     def test_exception_after_canceled_does_not_double_report_widget(self):
         thread = RunGuardEndedThread("canceled")
-        thread.error.connect(lambda *_: None)  # 有接收者时兜底会补发 canceled，才能暴露重复上报
+        thread.error.connect(
+            lambda *_: None
+        )  # 有接收者时兜底会补发 canceled，才能暴露重复上报
         widget = self.make_process_widget(thread, stoppable=True, hide_on_end=False)
         canceled, finished = [], []
         widget.canceled.connect(lambda: canceled.append(True))
@@ -631,7 +646,9 @@ class ProcessThreadRunGuardWidgetTest(ProcessWidgetTestBase):
 
     def test_exception_after_has_finished_does_not_leave_widget_canceled(self):
         thread = RunGuardEndedThread("hasFinished")
-        thread.error.connect(lambda *_: None)  # 有接收者时兜底才会补发 canceled，才能暴露矛盾上报
+        thread.error.connect(
+            lambda *_: None
+        )  # 有接收者时兜底才会补发 canceled，才能暴露矛盾上报
         widget = self.make_process_widget(thread, stoppable=True, hide_on_end=False)
         canceled, finished = [], []
         widget.canceled.connect(lambda: canceled.append(True))
@@ -647,7 +664,9 @@ class ProcessThreadRunGuardWidgetTest(ProcessWidgetTestBase):
 
     def test_exception_after_error_ends_widget_once_via_canceled(self):
         thread = RunGuardErrorThenRaiseThread()
-        thread.error.connect(lambda *_: None)  # 有接收者时兜底才会走「只补 canceled」路径
+        thread.error.connect(
+            lambda *_: None
+        )  # 有接收者时兜底才会走「只补 canceled」路径
         widget = self.make_process_widget(thread, stoppable=True, hide_on_end=False)
         canceled, finished = [], []
         widget.canceled.connect(lambda: canceled.append(True))
