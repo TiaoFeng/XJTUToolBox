@@ -144,6 +144,17 @@ class RunGuardThread(ProcessThread):
         raise self.error_to_raise
 
 
+class RunGuardChildThread(RunGuardThread):
+    """不重定义 run：继承的包装仍然生效。"""
+
+
+class RunGuardGrandChildThread(RunGuardChildThread):
+    """重定义 run：应被重新包装，且只上报一次。"""
+
+    def run(self):
+        raise ValueError("grand-child")
+
+
 class ProcessThreadRunGuardTest(unittest.TestCase):
     """ProcessThread 兜底子类 run() 中未捕获的异常。"""
 
@@ -155,12 +166,19 @@ class ProcessThreadRunGuardTest(unittest.TestCase):
         thread.hasFinished.connect(lambda: events.append(("finished",)))
         return thread, events
 
+    def _observe(self, thread):
+        events = []
+        thread.error.connect(lambda title, detail: events.append(("error", title, detail)))
+        thread.canceled.connect(lambda: events.append(("canceled",)))
+        return thread, events
+
     def test_unhandled_exception_reports_error_then_canceled(self):
         thread, events = self._guard_thread(ValueError("boom"))
 
         thread.run()
 
         self.assertEqual(events, [("error", "操作失败", "boom"), ("canceled",)])
+        self.assertFalse(thread.can_run)
 
     def test_empty_exception_message_falls_back_to_type_name(self):
         thread, events = self._guard_thread(ValueError())
@@ -185,6 +203,31 @@ class ProcessThreadRunGuardTest(unittest.TestCase):
         APP.processEvents()  # 信号经主线程事件循环派发
 
         self.assertEqual(events, [("error", "操作失败", "boom"), ("canceled",)])
+
+    def test_no_error_receiver_reraises_to_global_hook(self):
+        thread = RunGuardThread(ValueError("boom"))  # 不连接 error：异常应冒泡交给全局处理
+
+        with self.assertRaises(ValueError):
+            thread.run()
+
+        self.assertFalse(thread.can_run)
+
+    def test_inherited_run_is_still_guarded(self):
+        thread, events = self._observe(RunGuardChildThread(ValueError("inherited")))
+
+        thread.run()
+
+        self.assertEqual(events, [("error", "操作失败", "inherited"), ("canceled",)])
+
+    def test_redefined_run_is_wrapped_exactly_once(self):
+        thread, events = self._observe(RunGuardGrandChildThread())
+
+        thread.run()
+
+        self.assertEqual(events, [("error", "操作失败", "grand-child"), ("canceled",)])
+        self.assertEqual(type(thread).run.__name__, "run")
+        original = type(thread).run.__wrapped__
+        self.assertFalse(getattr(original, "_process_thread_guarded", False))
 
 
 if __name__ == "__main__":

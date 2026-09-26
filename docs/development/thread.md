@@ -53,7 +53,7 @@ flowchart TD
 - 成功路径：先发出业务结果信号，再发出 `hasFinished`。
 - 失败路径：先发出 `error(title, message)`，再发出 `canceled`。
 - 主动取消：检测到 `can_run` 为 `False` 后释放资源并发出 `canceled`。
-- 漏网之鱼：基类兜底按失败路径处理（`error` -> `canceled`）。
+- 漏网之鱼：基类兜底按失败路径处理（`error` -> `canceled`）；若 `error` 没有任何接收者，则回退为全局异常提示。
 
 例如成绩线程成功时会先发出 `scores`，随后发出 `hasFinished`；网络错误时会发出 `error`，随后发出 `canceled`。
 
@@ -177,8 +177,9 @@ else:
     self.hasFinished.emit()
 ```
 
-子类 `run()` 中未被捕获的异常由 `ProcessThread` 基类统一捕获：基类会记录带异常类型的日志（含完整 traceback），并依次发出 `error` 与 `canceled`。兜底时错误标题固定为“操作失败”，正文取 `str(error)`；异常信息为空时回退为异常类型名（例如 `ValueError()`），保证界面不会显示空正文。
-**注意**：兜底只用于处理漏网之鱼，可预期的失败**应该**在线程内处理，以便回报更准确的错误信息。
+子类 `run()` 中未被捕获的异常由 `ProcessThread` 基类统一捕获：基类会记录带异常类型的日志（含完整 traceback），并依次发出 `error` 与 `canceled`。兜底时错误标题固定为“操作失败”，正文取 `str(error)`；异常信息为空时回退为异常类型名（例如 `ValueError()`），保证界面不会显示空正文。兜底后会把 `can_run` 置为 `False`。
+如果线程的 `error` 信号没有任何接收者，基类不会吞掉异常，而是重新抛出交给 PyQt 的全局异常处理（配合 `MainWindow` 的 `sys.excepthook` 弹出错误对话框），避免线程失败后界面完全无提示。
+**注意**：兜底只用于处理漏网之鱼，可预期的失败**应该**在线程内处理，以便回报更准确的错误信息；业务界面也**应该**连接 `error` 以走自己的错误提示。
 
 界面层通常把 `error` 连接到 InfoBar、MessageBox 或自定义错误处理槽函数。
 
@@ -305,7 +306,7 @@ class CustomThread(ProcessThread):
 - UI 对象更新放在主线程槽函数中。
 - 成功结束发出业务结果信号和 `hasFinished`。
 - 失败或取消结束发出 `canceled`。
-- `run()` 的漏网之鱼由基类兜底为 `error`/`canceled`，线程实现不需要额外包裹。
+- `run()` 的漏网之鱼由基类兜底为 `error`/`canceled`（无接收者时回退为全局异常提示），线程实现不需要额外包裹。
 - 错误信息通过 `error` 传递。
 - 可取消线程在关键步骤检查 `can_run`。
 - 业务数据使用子类自定义信号返回。

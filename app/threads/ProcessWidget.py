@@ -214,11 +214,15 @@ class ProcessThread(QThread):
 
         @functools.wraps(run)
         def guarded_run(self):
-            # 线程入口的最后兜底：业务异常无法枚举（标注 noqa 消除 Ruff 提示），在此统一抛出而不是让它冒至全局
+            # 线程入口的最后兜底：在此统一捕获而不是让它冒至全局
             # sys.excepthook；SystemExit / KeyboardInterrupt 继承 BaseException，会照常穿透。
             try:
                 run(self)
-            except Exception as error:  # noqa: BLE001
+            except Exception as error:
+                self.can_run = False
+                if self.receivers(self.error) == 0:
+                    # 没有接收者时冒泡给 PyQt 全局异常处理，保留可见的错误提示
+                    raise
                 self._report_run_error(error)
 
         guarded_run._process_thread_guarded = True
