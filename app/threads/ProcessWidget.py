@@ -206,7 +206,12 @@ class ProcessThread(QThread):
         self.can_run = False
 
     def __init_subclass__(cls, **kwargs):
-        """子类 run() 统一兜底：漏网之鱼转成 error + canceled，子类不需要改名或包裹。"""
+        """子类 run() 统一兜底：漏网之鱼转成 error + canceled，子类不需要改名或包裹。
+
+        ## 注意
+        子类 run() 不应调用 super().run() 复用父类实现：父类的包装会先报告失败并正常返回，
+        子类无法得知父类逻辑已经失败。
+        """
         super().__init_subclass__(**kwargs)
         run = cls.__dict__.get("run")
         if run is None or getattr(run, "_process_thread_guarded", False):
@@ -214,20 +219,23 @@ class ProcessThread(QThread):
 
         @functools.wraps(run)
         def guarded_run(self):
-            # 线程入口的最后兜底：在此统一捕获而不是让它冒至全局
+            # 线程入口的最后兜底：业务异常无法枚举（标注 noqa 消除 Ruff 提示），在此统一捕获而不是让它冒至全局
             # sys.excepthook；SystemExit / KeyboardInterrupt 继承 BaseException，会照常穿透。
             try:
                 run(self)
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001
                 self.can_run = False
-                # 返回 -1 的场景（PyPrepared 预置连接）Python 侧不可构造，不影响 == 0 判断。
+                # receivers() 返回 -1 的场景（PyPrepared 预置连接）Python 侧不可构造，不影响 == 0 判断。
                 if self.receivers(self.error) == 0:
-                    # 没有接收者时冒泡给 PyQt 全局异常处理（MainWindow 弹原始 traceback），保留可见的错误提示；
-                    # 先写入日志再 raise，保证日志系统同样保留异常记录。
+                    # 没有接收者时交给全局异常处理（MainWindow 弹原始 traceback），保留错误提示。
+                    # 直接调用 sys.excepthook 不使用 raise：PyQt5 对逃逸的子线程异常在
+                    # sys.excepthook 为默认实现时会 qFatal 终止整个进程；直接调用同样保留
+                    # 全局弹窗，且不依赖 hook 是否安装。
                     logger.error(
                         "%s 后台任务失败：%s（error 无接收者，转交全局异常处理）",
                         type(self).__name__, type(error).__name__, exc_info=True)
-                    raise
+                    sys.excepthook(type(error), error, error.__traceback__)
+                    return
                 self._report_run_error(error)
 
         guarded_run._process_thread_guarded = True
