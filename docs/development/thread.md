@@ -174,8 +174,12 @@ else:
 并按 `test/app/test_thread_error_reporting.py` 的表格补充用例。注意二维码登录异常同时继承自
 MFA 异常，匹配顺序必须先二维码、后 MFA。
 
-`report_error()` 默认把两步验证提醒发给 `self.account`，即线程在 `run()` 开始时快照的账户，
-而不是 `accounts.current`；这样任务执行中切换或移除账户时，提示不会发错对象。
+`ProcessThread.account` 已声明为类属性（默认 `None`），子类在 `run()` 开始时快照账户即可。
+`report_error()` 默认把两步验证提醒发给 `self.account`，而不是 `accounts.current`；
+这样任务执行中切换或移除账户时，提示不会发错对象。
+
+业务特化的失败（例如场馆预约的“暂不可预订”）仍可由子类自行 `error.emit` + `canceled.emit`，
+但不要复制上面的通用登录、网络、服务器映射。
 
 界面层通常把 `error` 连接到 InfoBar、MessageBox 或自定义错误处理槽函数。
 
