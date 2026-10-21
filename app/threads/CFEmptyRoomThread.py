@@ -5,7 +5,6 @@ import requests
 from PyQt5.QtCore import pyqtSignal
 
 from ..threads.ProcessWidget import ProcessThread
-from ..utils import logger
 from ..utils.cache import CacheManager
 
 
@@ -58,18 +57,8 @@ class CFEmptyRoomThread(ProcessThread):
 
             self.progressChanged.emit(100)
 
-        except requests.ConnectionError:
-            logger.error("网络错误", exc_info=True)
-            self.error.emit(self.tr("无网络连接"), self.tr("请检查网络连接，然后重试。"))
-            self.canceled.emit()
-        except requests.RequestException as e:
-            logger.error("网络错误", exc_info=True)
-            self.error.emit(self.tr("网络错误"), str(e))
-            self.canceled.emit()
-        except Exception as e:
-            logger.error("其他错误", exc_info=True)
-            self.error.emit(self.tr("其他错误"), str(e))
-            self.canceled.emit()
+        except Exception as error:
+            self.report_error(error)
         else:
             self.success.emit("", self.tr("查询成功"))
             self.result.emit(result)
