@@ -1,7 +1,7 @@
 """子线程统一的失败上报。
 
 后台任务在 ``run()`` 里把业务异常交给 :func:`report_thread_error`，由这里完成
-「异常 → 用户可见文案」的映射，并按 :doc:`docs/development/thread` 的契约
+「异常 → 用户可见文案」的映射，并按 ``docs/development/thread.md`` 的契约
 先发出 ``error(title, message)``、再发出 ``canceled``。
 
 放在这里而不是各线程里，是为了让登录、网络、服务器错误的提示只有一份实现。
@@ -26,18 +26,18 @@ if TYPE_CHECKING:
 
 def report_thread_error(
         thread: ProcessThread,
-        error: BaseException,
+        error: Exception,
         account: Account | None = None) -> None:
     """把任务异常转换成用户提示，并结束本次任务。
 
-    :param thread: 发起任务的线程，提供 ``tr``、``error``、``canceled``。
+    :param thread: 发起任务的线程，提供 ``tr``、``account``、``error``、``canceled``。
     :param error: 捕获到的异常对象。
     :param account: 需要接收 MFA 提示的账户。默认取 ``thread.account``，
         也就是线程在 ``run()`` 开始时快照的账户；这样任务中途移除或切换账户时，
         提示仍然发给发起任务的账户，而不是 ``accounts.current``。
     """
     if account is None:
-        account = getattr(thread, "account", None)
+        account = thread.account
 
     # 二维码登录错误同时继承自 MFA 错误，必须先匹配子类，否则提示会串到 MFA 分支
     if isinstance(error, QRCodeLoginCancelledError):

@@ -8,19 +8,30 @@ import requests
 
 from auth import ServerError
 from app.threads.CampusFeatureThread import CampusFeatureThread
+from app.threads.error_reporting import report_thread_error
 from app.utils.mfa import MFACancelledError, MFAUnavailableError
 from app.utils.qrcode_login import QRCodeLoginCancelledError, QRCodeLoginUnavailableError
 from app.utils.campus_job import JOB_FAILED, run_campus_job
 
 
+class _FakeThread:
+    """run_campus_job 需要的 ProcessThread 子集。"""
+
+    def __init__(self):
+        self.can_run = True
+        self.account = None
+        self.tr = lambda text: text
+        self.error = Mock()
+        self.canceled = Mock()
+        self.setIndeterminate = Mock()
+        self.messageChanged = Mock()
+
+    def report_error(self, error, account=None):
+        report_thread_error(self, error, account=account)
+
+
 def _thread():
-    thread = SimpleNamespace(can_run=True)
-    thread.tr = lambda text: text
-    thread.error = Mock()
-    thread.canceled = Mock()
-    thread.setIndeterminate = Mock()
-    thread.messageChanged = Mock()
-    return thread
+    return _FakeThread()
 
 
 class CampusJobTest(unittest.TestCase):
@@ -225,6 +236,27 @@ class CampusJobTest(unittest.TestCase):
         worker.assert_called_once()
         thread.error.emit.assert_called_once_with("其他错误", "worker failed")
         thread.canceled.emit.assert_called_once()
+
+    def test_failure_is_reported_through_thread_report_error(self):
+        """失败必须走线程自己的 report_error，子类覆写才会生效。"""
+        account = SimpleNamespace(
+            username="u", password="p", MFASignal=Mock(),
+            session_manager=SimpleNamespace(
+                get_session=lambda _: SimpleNamespace(ensure_login=Mock()),
+                mfa_provider=None,
+            ),
+        )
+        thread = _thread()
+        thread.report_error = Mock()
+        worker = Mock(side_effect=RuntimeError("boom"))
+        with patch("app.utils.campus_job.accounts") as accounts:
+            accounts.current = account
+            result = run_campus_job(thread, site_key="hello", login_message="login", worker=worker)
+        self.assertIs(result, JOB_FAILED)
+        thread.report_error.assert_called_once()
+        self.assertIsInstance(thread.report_error.call_args.args[0], RuntimeError)
+        self.assertIs(thread.report_error.call_args.kwargs["account"], account)
+        thread.error.emit.assert_not_called()
 
 
 class CampusFeatureThreadTest(unittest.TestCase):

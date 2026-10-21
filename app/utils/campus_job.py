@@ -6,7 +6,6 @@ from collections.abc import Callable
 from typing import Any
 
 from app.threads.ProcessWidget import ProcessThread
-from app.threads.error_reporting import report_thread_error
 from app.utils import accounts
 
 # Distinguishes a failed/canceled job from a worker that legitimately returned None.
@@ -55,7 +54,8 @@ def run_campus_job(
             thread.canceled.emit()
             return JOB_FAILED
         return result
-    except Exception as e:
-        report_thread_error(thread, e, account=account)
+    except Exception as error:
+        # 走线程自己的入口，子类覆写 report_error 时这里同样生效
+        thread.report_error(error, account=account)
     thread.can_run = False
     return JOB_FAILED

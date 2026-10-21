@@ -25,9 +25,10 @@ APP = QApplication.instance() or QApplication([])
 
 
 def _fake_thread():
-    """只有统一错误上报所需的 tr / error / canceled 三个成员。"""
+    """只有统一错误上报所需的 tr / account / error / canceled 成员。"""
     thread = SimpleNamespace()
     thread.tr = lambda text: text
+    thread.account = None
     thread.error = Mock()
     thread.canceled = Mock()
     return thread
@@ -55,16 +56,17 @@ class ReportThreadErrorTest(unittest.TestCase):
                 self.assertEqual(thread.error.emit.call_args.args[0], title)
                 thread.canceled.emit.assert_called_once()
 
-    def test_server_error_102_notifies_only_given_account(self):
-        """账户在任务中途被移除或切换时，MFA 提示仍应发给发起任务的账户。"""
+    def test_explicit_account_wins_over_thread_snapshot(self):
+        """调用方显式传入账户时（如 campus_job 的快照），不应落到 thread.account。"""
+        thread_account = Mock(MFASignal=Mock())
         captured = Mock(MFASignal=Mock())
-        other = Mock(MFASignal=Mock())
         thread = _fake_thread()
+        thread.account = thread_account
 
         report_thread_error(thread, ServerError(102, "mfa"), account=captured)
 
         captured.MFASignal.emit.assert_called_once_with(True)
-        other.MFASignal.emit.assert_not_called()
+        thread_account.MFASignal.emit.assert_not_called()
         thread.canceled.emit.assert_called_once()
 
     def test_server_error_102_without_account_still_finishes(self):

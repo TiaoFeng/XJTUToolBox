@@ -193,6 +193,10 @@ class ProcessWidget(QFrame):
 
 
 class ProcessThread(QThread):
+    # 任务开始时由子类快照的账户；统一错误上报据此决定 MFA 提醒的接收者。
+    # 在这里声明，避免 report_error 依赖 getattr 兜底而把拼写错误静默当成“没有账户”。
+    account: "Account | None" = None
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.can_run = True
@@ -209,7 +213,7 @@ class ProcessThread(QThread):
     def onStopSignal(self):
         self.can_run = False
 
-    def report_error(self, error: BaseException, account: "Account | None" = None) -> None:
+    def report_error(self, error: Exception, account: "Account | None" = None) -> None:
         """统一的失败出口：把异常转成用户提示，并发出 ``canceled``。
 
         子类只需要在 ``run()`` 里写 ``except Exception as error: self.report_error(error)``，
