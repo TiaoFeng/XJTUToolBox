@@ -267,39 +267,5 @@ class GraduateJudgeThread(ProcessThread):
 
             else:
                 raise ValueError(self.tr("未知选项"))
-        except QRCodeLoginCancelledError as e:
-            logger.info("二维码登录已取消：%s", e)
-            self.error.emit(self.tr("扫码登录已取消"), self.tr("已取消扫码登录，本次操作未完成。"))
-            self.canceled.emit()
-        except QRCodeLoginUnavailableError as e:
-            logger.error("二维码登录交互不可用", exc_info=True)
-            self.error.emit(self.tr("登录问题"), str(e))
-            self.canceled.emit()
-        except MFACancelledError as e:
-            logger.info("MFA 验证已取消：%s", e)
-            self.error.emit(self.tr("安全验证已取消"), self.tr("已取消安全验证，本次操作未完成。"))
-            self.canceled.emit()
-        except MFAUnavailableError as e:
-            logger.error("MFA 交互不可用", exc_info=True)
-            self.error.emit(self.tr("登录问题"), str(e))
-            self.canceled.emit()
-        except ServerError as e:
-            logger.error("服务器错误", exc_info=True)
-            if e.code == 102:
-                self.error.emit(self.tr("登录问题"), self.tr("需要进行两步验证，请前往账户界面，选择对应账户进行验证。"))
-                request_mfa(self.account)
-            else:
-                self.error.emit(self.tr("服务器错误"), e.message)
-            self.canceled.emit()
-        except requests.ConnectionError:
-            logger.error("网络错误", exc_info=True)
-            self.error.emit(self.tr("无网络连接"), self.tr("请检查网络连接，然后重试。"))
-            self.canceled.emit()
-        except requests.RequestException as e:
-            logger.error("网络错误", exc_info=True)
-            self.error.emit(self.tr("网络错误"), str(e))
-            self.canceled.emit()
         except Exception as e:
-            logger.error("其他错误", exc_info=True)
-            self.error.emit(self.tr("其他错误"), str(e))
-            self.canceled.emit()
+            self.report_error(e)
