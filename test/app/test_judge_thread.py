@@ -29,15 +29,16 @@ class JudgeThreadFailureLoggingTest(unittest.TestCase):
             SimpleNamespace(KCM="课程1", WJMC="理论课"),
         ]
         thread.judge_.questionnaireData.side_effect = RuntimeError("boom")
-        errors = []
-        thread.error.connect(lambda title, _detail: errors.append(title))
+        progress = []
+        thread.progressChanged.connect(progress.append)
 
         with patch("app.threads.JudgeThread.logger") as logger:
             result = thread.judge_all()
 
         logger.error.assert_called_once()
         self.assertFalse(result)
-        self.assertEqual(errors, [""])
+        # 单门课程异常只记日志，整批仍应跑完（进度到 100）且不向外抛异常
+        self.assertEqual(progress[-1], 100)
 
 
 if __name__ == "__main__":
