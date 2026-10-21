@@ -1,14 +1,9 @@
-import requests
 from PyQt5.QtCore import pyqtSignal
 
-from auth.new_login import NewLogin
 from gmis.score import GraduateScore
 from ..sessions.gmis_session import GMISSession
 from ..threads.ProcessWidget import ProcessThread
-from ..utils import accounts, logger, cfg, request_mfa
-from ..utils.mfa import MFACancelledError, MFAUnavailableError
-from ..utils.qrcode_login import QRCodeLoginCancelledError, QRCodeLoginUnavailableError
-from auth import ServerError, GMIS_LOGIN_URL
+from ..utils import accounts
 
 
 class GraduateScoreThread(ProcessThread):

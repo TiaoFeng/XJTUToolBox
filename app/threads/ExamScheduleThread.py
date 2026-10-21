@@ -1,14 +1,9 @@
-import requests
 from PyQt5.QtCore import pyqtSignal
 
-from auth import ServerError
 from jwxt.schedule import Schedule
 from .ProcessWidget import ProcessThread
 from ..sessions.jwxt_session import JWXTSession
-from ..utils import logger
-from ..utils.account import accounts, request_mfa
-from ..utils.mfa import MFACancelledError, MFAUnavailableError
-from ..utils.qrcode_login import QRCodeLoginCancelledError, QRCodeLoginUnavailableError
+from ..utils.account import accounts
 
 
 class ExamScheduleThread(ProcessThread):

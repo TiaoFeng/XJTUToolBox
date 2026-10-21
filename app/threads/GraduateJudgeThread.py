@@ -1,6 +1,5 @@
 from typing import Optional, Dict
 
-import requests
 from PyQt5.QtCore import pyqtSignal
 
 from gmis.lesson_detail import GraduateLessonDetail
@@ -9,11 +8,8 @@ from gste.judge import GraduateAutoJudge, GraduateQuestionnaire, GraduateQuestio
 from .ProcessWidget import ProcessThread
 from ..sessions.gmis_session import GMISSession
 from ..sessions.gste_session import GSTESession
-from ..utils import Account, logger, request_mfa
-from ..utils.mfa import MFACancelledError, MFAUnavailableError
-from ..utils.qrcode_login import QRCodeLoginCancelledError, QRCodeLoginUnavailableError
+from ..utils import Account
 
-from auth import ServerError
 from enum import Enum
 
 

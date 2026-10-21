@@ -1,4 +1,3 @@
-import requests
 from PyQt5.QtCore import pyqtSignal
 
 from auth import ServerError
@@ -6,7 +5,7 @@ from .ProcessWidget import ProcessThread
 from ..sessions.attendance_session import AttendanceSession
 from ..sessions.jwxt_session import JWXTSession
 from ..sessions.js_session import JsSession
-from ..utils import logger, accounts, request_mfa
+from ..utils import logger, accounts
 from ..utils.mfa import MFACancelledError, MFAUnavailableError
 from ..utils.qrcode_login import QRCodeLoginCancelledError, QRCodeLoginUnavailableError
 from attendance import Attendance

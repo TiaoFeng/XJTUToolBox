@@ -1,14 +1,10 @@
 from enum import Enum
 
-import requests
 from PyQt5.QtCore import pyqtSignal
 
-from auth import ServerError
 from lms import LMSUtil
 from .ProcessWidget import ProcessThread
-from ..utils import accounts, logger, request_mfa
-from ..utils.mfa import MFACancelledError, MFAUnavailableError
-from ..utils.qrcode_login import QRCodeLoginCancelledError, QRCodeLoginUnavailableError
+from ..utils import accounts
 
 
 class LMSAction(Enum):

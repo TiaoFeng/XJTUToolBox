@@ -1,15 +1,12 @@
 from typing import Optional, List
 
-import requests
 from PyQt5.QtCore import pyqtSignal
 
 from jwxt.schedule import Schedule
 from jwxt.score import Score
 from ..sessions.jwxt_session import JWXTSession
 from ..threads.ProcessWidget import ProcessThread
-from ..utils import accounts, logger, cfg, request_mfa
-from ..utils.mfa import MFACancelledError, MFAUnavailableError
-from ..utils.qrcode_login import QRCodeLoginCancelledError, QRCodeLoginUnavailableError
+from ..utils import accounts, cfg
 from auth import ServerError
 
 

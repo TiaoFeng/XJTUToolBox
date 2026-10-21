@@ -1,15 +1,10 @@
 # 研究生查询课表的线程
-import requests
 from PyQt5.QtCore import pyqtSignal
 
-from auth import GMIS_LOGIN_URL, ServerError
-from auth.new_login import NewLogin
 from gmis.schedule import GraduateSchedule
 from ..sessions.gmis_session import GMISSession
 from ..threads.ProcessWidget import ProcessThread
-from ..utils import accounts, logger, cfg, request_mfa
-from ..utils.mfa import MFACancelledError, MFAUnavailableError
-from ..utils.qrcode_login import QRCodeLoginCancelledError, QRCodeLoginUnavailableError
+from ..utils import accounts
 
 
 class GraduateScheduleThread(ProcessThread):

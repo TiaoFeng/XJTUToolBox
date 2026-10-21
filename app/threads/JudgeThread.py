@@ -1,16 +1,12 @@
 from typing import Optional
 
-import requests
 from PyQt5.QtCore import pyqtSignal
 
 from .ProcessWidget import ProcessThread
 from ..sessions.jwxt_session import JWXTSession
-from ..utils import Account, logger, request_mfa
-from ..utils.mfa import MFACancelledError, MFAUnavailableError
-from ..utils.qrcode_login import QRCodeLoginCancelledError, QRCodeLoginUnavailableError
+from ..utils import Account, logger
 
 from jwxt import AutoJudge, QuestionnaireTemplate
-from auth import ServerError
 from enum import Enum
 
 

@@ -1,16 +1,12 @@
 from typing import Optional, List
 
-import requests
 from PyQt5.QtCore import pyqtSignal
 
-from auth import ServerError
 from jwxt.empty_room import EmptyRoom
 from ..sessions.jwxt_session import JWXTSession
 from ..threads.ProcessWidget import ProcessThread
-from ..utils import accounts, logger, cfg, request_mfa
+from ..utils import accounts
 from ..utils.cache import CacheManager
-from ..utils.mfa import MFACancelledError, MFAUnavailableError
-from ..utils.qrcode_login import QRCodeLoginCancelledError, QRCodeLoginUnavailableError
 
 
 class EmptyRoomThread(ProcessThread):

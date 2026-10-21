@@ -9,9 +9,7 @@ from attendance import Attendance
 from auth import ServerError
 from .ProcessWidget import ProcessThread
 from ..sessions.attendance_session import AttendanceSession
-from ..utils import accounts, logger, cfg, request_mfa
-from ..utils.mfa import MFACancelledError, MFAUnavailableError
-from ..utils.qrcode_login import QRCodeLoginCancelledError, QRCodeLoginUnavailableError
+from ..utils import accounts, logger, cfg
 
 
 class ScheduleAttendanceThread(ProcessThread):
