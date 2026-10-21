@@ -144,37 +144,38 @@ self.messageChanged.emit(self.tr("正在登录教务系统..."))
 
 ## 错误处理约定
 
-线程的错误处理应统一转换为 `error` 和 `canceled` 信号。典型异常包括：
+线程的错误处理统一走 `ProcessThread.report_error()`。它在 `app/threads/error_reporting.py`
+中把异常映射为用户可读的提示，按“先 `error(title, message)`、再 `canceled`”的顺序结束任务。
+已覆盖以下异常：
 
-- 用户取消二维码登录。
-- 用户取消 MFA 验证。
-- MFA 或二维码 provider 不可用。
-- `ServerError`。
+- 用户取消二维码登录（`QRCodeLoginCancelledError`）。
+- 二维码登录交互不可用（`QRCodeLoginUnavailableError`）。
+- 用户取消 MFA 验证（`MFACancelledError`）。
+- MFA 交互不可用（`MFAUnavailableError`）。
+- `ServerError`（`code == 102` 时额外向任务账户发出两步验证提醒）。
 - `requests.ConnectionError`。
 - `requests.RequestException`。
 - 其他异常。
 
-常见模式如下：
+因此子类只需要：
 
 ```python
 try:
     result = do_work()
-except requests.ConnectionError:
-    logger.error("网络错误", exc_info=True)
-    self.error.emit(self.tr("无网络连接"), self.tr("请检查网络连接，然后重试。"))
-    self.canceled.emit()
-except requests.RequestException as e:
-    logger.error("网络错误", exc_info=True)
-    self.error.emit(self.tr("网络错误"), str(e))
-    self.canceled.emit()
-except Exception as e:
-    logger.error("其他错误", exc_info=True)
-    self.error.emit(self.tr("其他错误"), str(e))
-    self.canceled.emit()
+except Exception as error:
+    self.report_error(error)
 else:
     self.resultReady.emit(result)
     self.hasFinished.emit()
 ```
+
+不要在子类里重复这套映射：提示文案只有一份实现，才能保证各线程对同一类失败给出相同反馈。
+需要新增或调整提示时，请修改 `app/threads/error_reporting.py` 里的 `report_thread_error()`，
+并按 `test/app/test_thread_error_reporting.py` 的表格补充用例。注意二维码登录异常同时继承自
+MFA 异常，匹配顺序必须先二维码、后 MFA。
+
+`report_error()` 默认把两步验证提醒发给 `self.account`，即线程在 `run()` 开始时快照的账户，
+而不是 `accounts.current`；这样任务执行中切换或移除账户时，提示不会发错对象。
 
 界面层通常把 `error` 连接到 InfoBar、MessageBox 或自定义错误处理槽函数。
 
@@ -250,11 +251,9 @@ self.thread_.start()
 ```python
 from __future__ import annotations
 
-import requests
 from PyQt5.QtCore import pyqtSignal
 
 from app.threads.ProcessWidget import ProcessThread
-from app.utils import logger
 
 
 class CustomThread(ProcessThread):
@@ -276,14 +275,8 @@ class CustomThread(ProcessThread):
                 self.canceled.emit()
                 return
 
-        except requests.ConnectionError:
-            logger.error("网络错误", exc_info=True)
-            self.error.emit(self.tr("无网络连接"), self.tr("请检查网络连接，然后重试。"))
-            self.canceled.emit()
-        except Exception as e:
-            logger.error("后台任务失败", exc_info=True)
-            self.error.emit(self.tr("操作失败"), str(e))
-            self.canceled.emit()
+        except Exception as error:
+            self.report_error(error)
         else:
             self.resultReady.emit(result)
             self.hasFinished.emit()
@@ -302,6 +295,7 @@ class CustomThread(ProcessThread):
 - 成功结束发出业务结果信号和 `hasFinished`。
 - 失败或取消结束发出 `canceled`。
 - 错误信息通过 `error` 传递。
+- 业务异常统一交给 `self.report_error(error)` 上报，不要在各线程重复异常映射。
 - 可取消线程在关键步骤检查 `can_run`。
 - 业务数据使用子类自定义信号返回。
 - `ProcessWidget` 负责进度展示和取消入口。
