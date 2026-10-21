@@ -1,5 +1,6 @@
 import sys
 import time
+from typing import TYPE_CHECKING
 
 from PyQt5.QtWidgets import QFrame, QHBoxLayout
 from PyQt5.QtCore import QThread, pyqtSignal, pyqtSlot, QTimer, Qt
@@ -7,6 +8,10 @@ from qfluentwidgets import ProgressBar, VBoxLayout, BodyLabel, PrimaryPushButton
     MessageBoxBase
 
 from ..utils import logger
+from .error_reporting import report_thread_error
+
+if TYPE_CHECKING:
+    from ..utils.account import Account
 
 
 class ProcessWidget(QFrame):
@@ -203,6 +208,15 @@ class ProcessThread(QThread):
     @pyqtSlot()
     def onStopSignal(self):
         self.can_run = False
+
+    def report_error(self, error: BaseException, account: "Account | None" = None) -> None:
+        """统一的失败出口：把异常转成用户提示，并发出 ``canceled``。
+
+        子类只需要在 ``run()`` 里写 ``except Exception as error: self.report_error(error)``，
+        不必再展开二维码登录、MFA、服务器、网络等各类异常的映射。
+        默认把 MFA 提示发给 ``self.account``，即 ``run()`` 开始时快照的账户。
+        """
+        report_thread_error(self, error, account=account)
 
 
 class ProcessDialog(MessageBoxBase):
